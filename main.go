@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"io/ioutil"
 	"mvdan.cc/xurls"
+	"sync"
 )
 
 func main() {
@@ -34,29 +35,45 @@ func main() {
 		return
 	}
 
+	type NewUrls struct {
+		Tree      *UrlTree
+		FromUrl   string
+		FoundUrls *[]string
+	}
+
 	// url collector channel
 	urlCollector := make(chan *NewUrls, 50)
 	defer close(urlCollector)
 
-	// worker
 	ctx := context.WithValue(context.Background(), "verbose", *verbose)
 	ctx, cancel := context.WithTimeout(ctx, *timeout*time.Millisecond)
 	defer cancel()
-	workerFn := func(url string) {
-		urls, err := Run(ctx, url)
+
+	// worker
+	workerFn := func(ctx context.Context, wg *sync.WaitGroup, url string, rootTree *UrlTree) {
+		defer wg.Done()
+		urls, err := GetUrls(ctx, url)
 		if err != nil {
 			fmt.Println(err.Error())
 			return
 		}
-		urlCollector <- &NewUrls{FromUrl:url,FoundUrls:urls}
+		urlCollector <- &NewUrls{Tree: rootTree, FromUrl: url, FoundUrls: urls}
 	}
 
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
 	// roll it
-	go workerFn(*baseUrl)
+	baseTree := &UrlTree{Url: *baseUrl}
+	wg.Add(1)
+	go workerFn(ctx, &wg, *baseUrl, baseTree)
 
 	// start collector
-	//urlTree := UrlTree{RootUrl: *baseUrl, SubUrls: make([]*UrlTree, 0)}
-	//urlMap := make(map[string]*UrlTree)
+	urlMap := make(map[string]*UrlTree)
 coll:
 	for {
 		select {
@@ -64,32 +81,26 @@ coll:
 			break
 			break coll
 		case newUrls := <-urlCollector:
-			//from := newUrls.FromUrl
-			urls := *newUrls.FoundUrls
-
-			//urlMap[from] = urls
-			for _, url := range urls {
-				go workerFn(url)
+			for _, url := range *newUrls.FoundUrls {
+				subTree := &UrlTree{RootTree: newUrls.Tree, Url: url}
+				urlMap[url] = subTree
+				if _, ex := urlMap[url]; !ex {
+					wg.Add(1)
+					go workerFn(ctx, &wg, url, subTree)
+				}
 			}
-
-			fmt.Printf("GOT THEM: %d\n", len(urls))
-			//break coll
+			//break
 		}
 	}
 }
 
-type NewUrls struct {
-	FromUrl string
-	FoundUrls *[]string
-}
-
 type UrlTree struct {
-	RootUrl string
-	SubUrls []*UrlTree // urls found on the url
+	RootTree *UrlTree
+	Url      string
 }
 
-// Worker
-func Run(ctx context.Context, url string) (*[]string, error) {
+// Get urls
+func GetUrls(ctx context.Context, url string) (*[]string, error) {
 	workerTimestamp := time.Now()
 
 	req, err := http.NewRequest(http.MethodGet, url, nil)
