@@ -1,4 +1,2 @@
-# WIP
-
-## urlcrawler
+# urlcrawler
 A small site crawler that finds urls
