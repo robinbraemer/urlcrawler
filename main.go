@@ -40,23 +40,24 @@ func main() {
 
 	// worker
 	ctx := context.WithValue(context.Background(), "verbose", *verbose)
-	ctx, cancel := context.WithTimeout(ctx, *timeout*time.Millisecond)
-	defer cancel()
+	//ctx, cancel := context.WithTimeout(ctx, *timeout*time.Millisecond)
+	//defer cancel()
 	workerFn := func(url string) {
 		urls, err := Run(ctx, url)
 		if err != nil {
 			fmt.Println(err.Error())
 			return
 		}
-		urlCollector <- &NewUrls{FromUrl:url,FoundUrls:urls}
+		urlCollector <- &NewUrls{FromUrl: url, FoundUrls: urls}
 	}
 
+	urlMap := make(map[string]*[]string)
 	// roll it
+	urlMap[*baseUrl] = nil
 	go workerFn(*baseUrl)
 
 	// start collector
 	//urlTree := UrlTree{RootUrl: *baseUrl, SubUrls: make([]*UrlTree, 0)}
-	//urlMap := make(map[string]*UrlTree)
 coll:
 	for {
 		select {
@@ -69,7 +70,10 @@ coll:
 
 			//urlMap[from] = urls
 			for _, url := range urls {
-				go workerFn(url)
+				if _, ex := urlMap[url]; !ex {
+					urlMap[url] = nil
+					go workerFn(url)
+				}
 			}
 
 			fmt.Printf("GOT THEM: %d\n", len(urls))
@@ -79,7 +83,7 @@ coll:
 }
 
 type NewUrls struct {
-	FromUrl string
+	FromUrl   string
 	FoundUrls *[]string
 }
 
